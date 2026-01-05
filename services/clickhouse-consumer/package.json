@@ -1,0 +1,14 @@
+{
+  "name": "clickhouse-consumer",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch --import=dotenv/config main.ts",
+    "start": "node --import=dotenv/config main.ts"
+  },
+  "dependencies": {
+    "@clickhouse/client": "^1.6.0",
+    "kafkajs": "^2.2.4",
+    "@sp-stats/telemetry": "workspace:*"
+  }
+}

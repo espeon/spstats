@@ -1,0 +1,14 @@
+{
+  "name": "tap-publisher",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch --import=dotenv/config main.ts",
+    "start": "node --import=dotenv/config main.ts"
+  },
+  "dependencies": {
+    "@atproto/tap": "^0.0.3",
+    "kafkajs": "^2.2.4",
+    "@sp-stats/telemetry": "workspace:*"
+  }
+}

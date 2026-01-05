@@ -1,0 +1,68 @@
+version: "3.8"
+
+services:
+  tap:
+    image: ghcr.io/bluesky-social/indigo/tap:latest
+    platform: linux/amd64
+    ports:
+      - "2480:2480"
+    environment:
+      - TAP_ADMIN_PASSWORD=admin
+      - TAP_PORT=2480
+      - TAP_DB_PATH=/data/tap.db
+    volumes:
+      - ./tap_data:/data
+    restart: unless-stopped
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+      - --mode dev-container
+      - --smp 1
+      - --default-log-level=info
+    ports:
+      - "18081:18081"
+      - "18082:18082"
+      - "19092:19092"
+      - "19644:9644"
+    volumes:
+      - ./redpanda_data:/var/lib/redpanda/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      - CLICKHOUSE_DB=sp_stats
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    volumes:
+      - ./clickhouse_data:/var/lib/clickhouse
+      - ./schema/init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
+volumes:
+  redpanda_data:
+  clickhouse_data:

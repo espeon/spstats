@@ -1,0 +1,12 @@
+# deno
+.env
+*.log
+node_modules
+
+# data volumes
+clickhouse_data/
+redpanda_data/
+tempo_data/
+tap_data/
+victoria_data/
+grafana_data/
