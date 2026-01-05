@@ -130,7 +130,9 @@ class ClickHouseConsumer {
         const row = {
           at_uri: event.atUri,
           ingested_at: event.timestamp,
-          created_at: event.createdAt ? new Date(event.createdAt).getTime() : null,
+          created_at: event.createdAt
+            ? new Date(event.createdAt).getTime()
+            : null,
           did: event.did,
           collection: event.collection || "",
           rkey: event.rkey || "",
