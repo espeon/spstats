@@ -101,7 +101,7 @@ class ClickHouseConsumer {
 
         await this.insertEvent(event);
 
-        logger.info(
+        logger.debug(
           {
             type: event.type,
             at_uri: event.atUri,

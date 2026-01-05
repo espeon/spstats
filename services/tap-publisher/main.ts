@@ -260,7 +260,7 @@ class TapPublisher {
           ],
         });
 
-        logger.info(
+        logger.debug(
           {
             type: event.type,
             at_uri: event.atUri,
