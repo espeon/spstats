@@ -78,10 +78,10 @@ class TapPublisher {
       await tracer.startActiveSpan("process_record", async (span) => {
         try {
           // filter for stream.place.* records
-          // if (!evt.collection?.startsWith("stream.place.")) {
-          //   span.end();
-          //   return;
-          // }
+          if (!evt.collection?.startsWith("stream.place.")) {
+            span.end();
+            return;
+          }
 
           span.setAttribute("event.did", evt.did);
           span.setAttribute("event.collection", evt.collection);
