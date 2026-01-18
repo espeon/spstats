@@ -4,8 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "tap": "pnpm --filter tap-publisher dev",
-    "consumer": "pnpm --filter clickhouse-consumer dev"
+    "stream": "pnpm --filter stream dev"
   },
   "dependencies": {
     "dotenv": "^16.4.7"

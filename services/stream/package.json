@@ -1,5 +1,5 @@
 {
-  "name": "clickhouse-consumer",
+  "name": "stream-processor",
   "version": "0.1.0",
   "type": "module",
   "scripts": {
@@ -7,8 +7,8 @@
     "start": "node --import=dotenv/config main.ts"
   },
   "dependencies": {
+    "@atproto/tap": "^0.0.3",
     "@clickhouse/client": "^1.6.0",
-    "kafkajs": "^2.2.4",
     "@sp-stats/telemetry": "workspace:*"
   }
 }

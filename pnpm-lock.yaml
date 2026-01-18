@@ -37,29 +37,17 @@ importers:
         specifier: ^9.5.0
         version: 9.14.0
 
-  services/clickhouse-consumer:
+  services/stream:
     dependencies:
+      '@atproto/tap':
+        specifier: ^0.0.3
+        version: 0.0.3
       '@clickhouse/client':
         specifier: ^1.6.0
         version: 1.15.0
       '@sp-stats/telemetry':
         specifier: workspace:*
         version: link:../../lib/telemetry
-      kafkajs:
-        specifier: ^2.2.4
-        version: 2.2.4
-
-  services/tap-publisher:
-    dependencies:
-      '@atproto/tap':
-        specifier: ^0.0.3
-        version: 0.0.3
-      '@sp-stats/telemetry':
-        specifier: workspace:*
-        version: link:../../lib/telemetry
-      kafkajs:
-        specifier: ^2.2.4
-        version: 2.2.4
 
 packages:
 
@@ -896,10 +884,6 @@ packages:
 
   json-bigint@1.0.0:
     resolution: {integrity: sha512-SiPv/8VpZuWbvLSMtTDU8hEfrZWg/mH/nV/b4o0CYbSxu1UIQPLdwKOCIyLQX+VIPO5vrLX3i8qtqFyhdPSUSQ==}
-
-  kafkajs@2.2.4:
-    resolution: {integrity: sha512-j/YeapB1vfPT2iOIUn/vxdyKEuhuY2PxMBvf5JWux6iSaukAccrMtXEY/Lb7OvavDhOWME589bpLrEdnVHjfjA==}
-    engines: {node: '>=14.0.0'}
 
   lodash.camelcase@4.3.0:
     resolution: {integrity: sha512-TwuEnCnxbc3rAvhf/LbG7tJUDzhqXyFnv3dtzLOPgCG/hODL7WFnsbwktkD7yUV0RrreP/l1PALq/YSg6VvjlA==}
@@ -2225,8 +2209,6 @@ snapshots:
   json-bigint@1.0.0:
     dependencies:
       bignumber.js: 9.3.1
-
-  kafkajs@2.2.4: {}
 
   lodash.camelcase@4.3.0: {}
 

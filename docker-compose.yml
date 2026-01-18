@@ -14,36 +14,36 @@ services:
       - ./tap_data:/data
     restart: unless-stopped
 
-  redpanda:
-    image: docker.redpanda.com/redpandadata/redpanda:latest
-    command:
-      - redpanda
-      - start
-      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
-      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
-      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
-      - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
-      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
-      - --rpc-addr redpanda:33145
-      - --advertise-rpc-addr redpanda:33145
-      - --mode dev-container
-      - --smp 1
-      - --default-log-level=info
-    ports:
-      - "18081:18081"
-      - "18082:18082"
-      - "19092:19092"
-      - "19644:9644"
-    volumes:
-      - ./redpanda_data:/var/lib/redpanda/data
-    restart: unless-stopped
-    healthcheck:
-      test:
-        ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1"]
-      interval: 15s
-      timeout: 3s
-      retries: 5
-      start_period: 5s
+  # redpanda:
+  #   image: docker.redpanda.com/redpandadata/redpanda:latest
+  #   command:
+  #     - redpanda
+  #     - start
+  #     - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+  #     - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+  #     - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+  #     - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
+  #     - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+  #     - --rpc-addr redpanda:33145
+  #     - --advertise-rpc-addr redpanda:33145
+  #     - --mode dev-container
+  #     - --smp 1
+  #     - --default-log-level=info
+  #   ports:
+  #     - "18081:18081"
+  #     - "18082:18082"
+  #     - "19092:19092"
+  #     - "19644:9644"
+  #   volumes:
+  #     - ./redpanda_data:/var/lib/redpanda/data
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test:
+  #       ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1"]
+  #     interval: 15s
+  #     timeout: 3s
+  #     retries: 5
+  #     start_period: 5s
 
   clickhouse:
     image: clickhouse/clickhouse-server:latest

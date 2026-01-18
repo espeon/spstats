@@ -1,17 +1,19 @@
 import { SimpleIndexer, Tap } from "@atproto/tap";
-import { Kafka } from "kafkajs";
+import { createClient } from "@clickhouse/client";
 import { initTelemetry } from "@sp-stats/telemetry";
 
-const { logger, tracer } = initTelemetry("tap-publisher");
+const { logger, tracer } = initTelemetry("stream-processor");
 
 const TAP_URL = process.env.TAP_URL || "http://localhost:2480";
 const TAP_ADMIN_PASSWORD = process.env.TAP_ADMIN_PASSWORD;
-const KAFKA_BROKERS = (process.env.KAFKA_BROKERS || "localhost:19092").split(
-  ",",
-);
-const KAFKA_TOPIC = process.env.KAFKA_TOPIC || "stream-place-events";
+const CLICKHOUSE_URL = process.env.CLICKHOUSE_URL || "http://localhost:8123";
+const CLICKHOUSE_DATABASE = process.env.CLICKHOUSE_DATABASE || "sp_stats";
 const RELAY_URL =
   process.env.RELAY_URL || "https://relay1.us-east.bsky.network";
+const DID_SCRAPE_INTERVAL_MS = parseInt(
+  process.env.DID_SCRAPE_INTERVAL_MS || `${20 * 60 * 1000}`,
+  10,
+);
 
 const STREAM_PLACE_COLLECTIONS = [
   "place.stream.chat.profile",
@@ -32,23 +34,23 @@ interface TapEvent {
   recordData?: any;
 }
 
-class TapPublisher {
+class StreamProcessor {
   private tap: Tap;
   private indexer: SimpleIndexer;
-  private kafka: Kafka;
-  private producer: any;
   private channel: any;
+  private clickhouse: ReturnType<typeof createClient>;
+  private didCache: Set<string> = new Set();
+  private scrapeInterval: NodeJS.Timeout | null = null;
 
   constructor() {
     this.tap = new Tap(TAP_URL, { adminPassword: TAP_ADMIN_PASSWORD });
     this.indexer = new SimpleIndexer();
 
-    this.kafka = new Kafka({
-      clientId: "tap-publisher",
-      brokers: KAFKA_BROKERS,
+    this.clickhouse = createClient({
+      url: CLICKHOUSE_URL,
+      database: CLICKHOUSE_DATABASE,
     });
 
-    this.producer = this.kafka.producer();
     this.setupIndexer();
   }
 
@@ -63,21 +65,18 @@ class TapPublisher {
       logger.info("tap channel restarted");
     } catch (error) {
       logger.error({ error }, "failed to restart channel");
-      // retry after delay
       setTimeout(() => this.restartChannel(), 5000);
     }
   }
 
   private setupIndexer() {
-    // skip identity events - we only care about records
     this.indexer.identity(async (evt) => {
-      // no-op
+      // no-op - we only care about records
     });
 
     this.indexer.record(async (evt) => {
       await tracer.startActiveSpan("process_record", async (span) => {
         try {
-          // filter for place.stream.* records
           if (!evt.collection?.startsWith("place.stream.")) {
             span.end();
             return;
@@ -100,7 +99,7 @@ class TapPublisher {
             recordData: evt.record,
           };
 
-          await this.publishEvent(tapEvent);
+          await this.insertEvent(tapEvent);
           span.end();
         } catch (error) {
           logger.error({ event: evt, error }, "failed to process record event");
@@ -114,7 +113,6 @@ class TapPublisher {
     this.indexer.error(async (err) => {
       logger.error({ error: err }, "indexer error");
 
-      // if it's a websocket error, try to restart the channel
       if (err.message?.includes("RSV") || err.message?.includes("WebSocket")) {
         await this.restartChannel();
       }
@@ -122,29 +120,31 @@ class TapPublisher {
   }
 
   async start() {
-    return tracer.startActiveSpan("tap-publisher.start", async (span) => {
+    return tracer.startActiveSpan("stream-processor.start", async (span) => {
       try {
-        logger.info("connecting to kafka...");
-        await this.producer.connect();
-        logger.info("connected to kafka");
-
         logger.info("discovering DIDs from relay...");
-        const dids = await this.discoverDids();
-        logger.info({ did_count: dids.size }, "discovery complete");
-        span.setAttribute("dids.count", dids.size);
+        await this.scrapeDids();
+        logger.info(
+          { did_count: this.didCache.size },
+          "initial scrape complete",
+        );
+        span.setAttribute("initial_dids.count", this.didCache.size);
 
         this.channel = this.tap.channel(this.indexer);
         this.channel.start();
         logger.info("tap channel started");
 
-        if (dids.size > 0) {
-          logger.info("adding repos to tap...");
-          await this.tap.addRepos(Array.from(dids));
-          logger.info("repos added to tap");
-        } else {
-          logger.warn("no DIDs found, nothing to track");
-        }
+        logger.info(
+          { interval_ms: DID_SCRAPE_INTERVAL_MS },
+          "starting DID scrape job",
+        );
+        this.scrapeInterval = setInterval(() => {
+          this.scrapeDids().catch((error) => {
+            logger.error({ error }, "DID scrape job failed");
+          });
+        }, DID_SCRAPE_INTERVAL_MS);
 
+        logger.info("stream processor running");
         span.end();
       } catch (error) {
         logger.error({ error }, "failed to start");
@@ -155,25 +155,51 @@ class TapPublisher {
     });
   }
 
-  private async discoverDids(): Promise<Set<string>> {
-    return tracer.startActiveSpan("discover_dids", async (span) => {
-      const allDids = new Set<string>();
+  private async scrapeDids() {
+    return tracer.startActiveSpan("scrape_dids", async (span) => {
+      const previousCount = this.didCache.size;
 
       for (const collection of STREAM_PLACE_COLLECTIONS) {
         logger.info({ collection }, "fetching DIDs");
         try {
           const dids = await this.fetchDidsForCollection(collection);
-          dids.forEach((did) => allDids.add(did));
-          logger.info({ collection, count: dids.length }, "fetched DIDs");
+          const newDids: string[] = [];
+
+          for (const did of dids) {
+            if (!this.didCache.has(did)) {
+              this.didCache.add(did);
+              newDids.push(did);
+            }
+          }
+
+          logger.info(
+            { collection, total: dids.length, new: newDids.length },
+            "fetched DIDs",
+          );
+
+          if (newDids.length > 0) {
+            logger.info({ count: newDids.length }, "adding new repos to tap");
+            await this.tap.addRepos(newDids);
+          }
         } catch (error) {
           logger.error({ collection, error }, "failed to fetch DIDs");
           span.recordException(error as Error);
         }
       }
 
-      span.setAttribute("total_dids", allDids.size);
+      const addedCount = this.didCache.size - previousCount;
+      span.setAttribute("total_dids", this.didCache.size);
+      span.setAttribute("new_dids", addedCount);
+      logger.info(
+        {
+          previous: previousCount,
+          current: this.didCache.size,
+          added: addedCount,
+        },
+        "scrape complete",
+      );
+
       span.end();
-      return allDids;
     });
   }
 
@@ -243,37 +269,50 @@ class TapPublisher {
     });
   }
 
-  private async publishEvent(event: TapEvent) {
-    return tracer.startActiveSpan("publish_to_kafka", async (span) => {
+  private async insertEvent(event: TapEvent) {
+    return tracer.startActiveSpan("insert_to_clickhouse", async (span) => {
       try {
         span.setAttribute("event.type", event.type);
         span.setAttribute("event.at_uri", event.atUri);
-        span.setAttribute("event.is_backfill", event.isBackfill);
 
-        await this.producer.send({
-          topic: KAFKA_TOPIC,
-          messages: [
-            {
-              key: event.did,
-              value: JSON.stringify(event),
-            },
-          ],
+        const row = {
+          at_uri: event.atUri,
+          ingested_at: event.timestamp,
+          created_at: event.createdAt
+            ? new Date(event.createdAt).getTime()
+            : null,
+          did: event.did,
+          collection: event.collection || "",
+          rkey: event.rkey || "",
+          event_type: event.type,
+          action: event.action || "",
+          is_backfill: event.isBackfill ? 1 : 0,
+          record_data: event.recordData || {},
+        };
+
+        const startTime = performance.now();
+        await this.clickhouse.insert({
+          table: "stream_place_events",
+          values: [row],
+          format: "JSONEachRow",
         });
+        const duration = performance.now() - startTime;
 
-        logger.info(
+        logger.debug(
           {
             type: event.type,
             at_uri: event.atUri,
             collection: event.collection,
-            action: event.action,
             is_backfill: event.isBackfill,
+            duration_ms: duration.toFixed(0),
           },
-          "published event",
+          "stored event",
         );
 
+        span.setAttribute("insert.duration_ms", duration);
         span.end();
       } catch (error) {
-        logger.error({ event, error }, "failed to publish to kafka");
+        logger.error({ event, error }, "failed to insert to clickhouse");
         span.recordException(error as Error);
         span.end();
         throw error;
@@ -283,29 +322,36 @@ class TapPublisher {
 
   async stop() {
     logger.info("shutting down...");
+
+    if (this.scrapeInterval) {
+      clearInterval(this.scrapeInterval);
+      this.scrapeInterval = null;
+    }
+
     if (this.channel) {
       await this.channel.destroy();
     }
-    await this.producer.disconnect();
+
+    await this.clickhouse.close();
+
     logger.info("shutdown complete");
   }
 }
 
-const publisher = new TapPublisher();
+const processor = new StreamProcessor();
 
 process.on("SIGINT", async () => {
-  await publisher.stop();
+  await processor.stop();
   process.exit(0);
 });
 
 process.on("SIGTERM", async () => {
-  await publisher.stop();
+  await processor.stop();
   process.exit(0);
 });
 
-// catch unhandled websocket errors and restart
 process.on("unhandledRejection", (error) => {
   logger.error({ error }, "unhandled rejection");
 });
 
-await publisher.start();
+await processor.start();
