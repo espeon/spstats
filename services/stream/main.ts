@@ -8,6 +8,7 @@ const TAP_URL = process.env.TAP_URL || "http://localhost:2480";
 const TAP_ADMIN_PASSWORD = process.env.TAP_ADMIN_PASSWORD;
 const CLICKHOUSE_URL = process.env.CLICKHOUSE_URL || "http://localhost:8123";
 const CLICKHOUSE_DATABASE = process.env.CLICKHOUSE_DATABASE || "sp_stats";
+const CONCURRENCY = parseInt(process.env.CONCURRENCY || "5", 10);
 
 interface TapEvent {
   type: "record" | "identity";
@@ -30,6 +31,8 @@ class StreamProcessor {
   private lastEventTime: number = Date.now();
   private healthCheckInterval?: NodeJS.Timeout;
   private isShuttingDown: boolean = false;
+  private eventQueue: Array<{ evt: any; resolve: () => void }> = [];
+  private activeWorkers: number = 0;
 
   constructor() {
     this.tap = new Tap(TAP_URL, { adminPassword: TAP_ADMIN_PASSWORD });
@@ -154,45 +157,67 @@ class StreamProcessor {
     }, 3000); // check every 3 seconds
   }
 
+  private async processEvent(evt: any) {
+    return tracer.startActiveSpan("process_record", async (span) => {
+      try {
+        if (!evt.collection?.startsWith("place.stream.")) {
+          span.end();
+          return;
+        }
+
+        span.setAttribute("event.did", evt.did);
+        span.setAttribute("event.collection", evt.collection);
+        span.setAttribute("event.action", evt.action);
+
+        const tapEvent: TapEvent = {
+          type: "record",
+          did: evt.did,
+          atUri: `at://${evt.did}/${evt.collection}/${evt.rkey}`,
+          timestamp: Date.now(),
+          createdAt: (evt.record as any)?.createdAt,
+          action: evt.action,
+          isBackfill: false,
+          collection: evt.collection,
+          rkey: evt.rkey,
+          recordData: evt.record,
+        };
+
+        await this.insertEvent(tapEvent);
+        this.lastEventTime = Date.now();
+        span.end();
+      } catch (error) {
+        logger.error({ event: evt, error }, "failed to process record event");
+        span.recordException(error as Error);
+        span.end();
+      }
+    });
+  }
+
+  private async worker() {
+    while (!this.isShuttingDown) {
+      if (this.eventQueue.length === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        continue;
+      }
+
+      const item = this.eventQueue.shift();
+      if (!item) continue;
+
+      this.activeWorkers++;
+      await this.processEvent(item.evt);
+      this.activeWorkers--;
+      item.resolve();
+    }
+  }
+
   private setupIndexer() {
     this.indexer.identity(async (evt) => {
       // no-op - we only care about records
     });
 
     this.indexer.record(async (evt) => {
-      await tracer.startActiveSpan("process_record", async (span) => {
-        try {
-          if (!evt.collection?.startsWith("place.stream.")) {
-            span.end();
-            return;
-          }
-
-          span.setAttribute("event.did", evt.did);
-          span.setAttribute("event.collection", evt.collection);
-          span.setAttribute("event.action", evt.action);
-
-          const tapEvent: TapEvent = {
-            type: "record",
-            did: evt.did,
-            atUri: `at://${evt.did}/${evt.collection}/${evt.rkey}`,
-            timestamp: Date.now(),
-            createdAt: (evt.record as any)?.createdAt,
-            action: evt.action,
-            isBackfill: false,
-            collection: evt.collection,
-            rkey: evt.rkey,
-            recordData: evt.record,
-          };
-
-          await this.insertEvent(tapEvent);
-          this.lastEventTime = Date.now();
-          span.end();
-        } catch (error) {
-          logger.error({ event: evt, error }, "failed to process record event");
-          span.recordException(error as Error);
-          span.end();
-          // don't throw - let the stream continue processing other events
-        }
+      return new Promise<void>((resolve) => {
+        this.eventQueue.push({ evt, resolve });
       });
     });
 
@@ -206,6 +231,12 @@ class StreamProcessor {
     return tracer.startActiveSpan("stream-processor.start", async (span) => {
       try {
         await this.ensureSchema();
+
+        // start worker pool
+        for (let i = 0; i < CONCURRENCY; i++) {
+          this.worker();
+        }
+        logger.info({ workers: CONCURRENCY }, "worker pool started");
 
         this.channel = this.tap.channel(this.indexer);
         this.channel.start();
