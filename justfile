@@ -32,13 +32,8 @@ logs service="":
         docker compose logs -f {{service}}
     fi
 
-# start tap-publisher
-tap:
-    pnpm --filter tap-publisher dev
-
-# start clickhouse-consumer
-consumer:
-    pnpm --filter clickhouse-consumer dev
+stream:
+    pnpm --filter stream dev
 
 # add repos to track (usage: just add-repos did:plc:xyz did:plc:abc)
 add-repos +dids:

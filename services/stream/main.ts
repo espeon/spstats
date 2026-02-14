@@ -15,6 +15,8 @@ const DID_SCRAPE_INTERVAL_MS = parseInt(
   10,
 );
 
+console.log(TAP_ADMIN_PASSWORD);
+
 const STREAM_PLACE_COLLECTIONS = [
   "place.stream.chat.profile",
   "place.stream.chat.message",
@@ -52,6 +54,61 @@ class StreamProcessor {
     });
 
     this.setupIndexer();
+  }
+
+  async ensureSchema() {
+    return tracer.startActiveSpan("ensure_schema", async (span) => {
+      try {
+        logger.info("ensuring database schema exists");
+
+        await this.clickhouse.exec({
+          query: "CREATE DATABASE IF NOT EXISTS sp_stats",
+        });
+
+        await this.clickhouse.exec({
+          query: `
+            CREATE TABLE IF NOT EXISTS stream_place_events (
+              at_uri String,
+              ingested_at DateTime64(3),
+              created_at Nullable(DateTime64(3)),
+              did String,
+              collection String,
+              rkey String,
+              event_type String,
+              action String,
+              is_backfill UInt8,
+              record_data JSON
+            ) ENGINE = MergeTree()
+            ORDER BY (collection, ingested_at, did)
+            PARTITION BY toYYYYMM(ingested_at)
+          `,
+        });
+
+        await this.clickhouse.exec({
+          query: `
+            CREATE INDEX IF NOT EXISTS idx_did
+            ON stream_place_events (did)
+            TYPE bloom_filter GRANULARITY 1
+          `,
+        });
+
+        await this.clickhouse.exec({
+          query: `
+            CREATE INDEX IF NOT EXISTS idx_at_uri
+            ON stream_place_events (at_uri)
+            TYPE bloom_filter GRANULARITY 1
+          `,
+        });
+
+        logger.info("schema ready");
+        span.end();
+      } catch (error) {
+        logger.error({ error }, "failed to ensure schema");
+        span.recordException(error as Error);
+        span.end();
+        throw error;
+      }
+    });
   }
 
   async restartChannel() {
@@ -122,6 +179,8 @@ class StreamProcessor {
   async start() {
     return tracer.startActiveSpan("stream-processor.start", async (span) => {
       try {
+        await this.ensureSchema();
+
         logger.info("discovering DIDs from relay...");
         await this.scrapeDids();
         logger.info(
@@ -298,7 +357,7 @@ class StreamProcessor {
         });
         const duration = performance.now() - startTime;
 
-        logger.debug(
+        logger.info(
           {
             type: event.type,
             at_uri: event.atUri,
@@ -351,7 +410,29 @@ process.on("SIGTERM", async () => {
 });
 
 process.on("unhandledRejection", (error) => {
-  logger.error({ error }, "unhandled rejection");
+  logger.error(
+    {
+      error,
+      errorString: String(error),
+      errorStack: error instanceof Error ? error.stack : undefined,
+      errorType: error?.constructor?.name,
+      password: TAP_ADMIN_PASSWORD,
+    },
+    "unhandled rejection",
+  );
+  process.exit(1);
 });
 
-await processor.start();
+await processor.start().catch((error) => {
+  logger.error(
+    {
+      error,
+      message: error?.message,
+      stack: error?.stack,
+      type: error?.constructor?.name,
+      password: TAP_ADMIN_PASSWORD,
+    },
+    "startup failed",
+  );
+  process.exit(1);
+});

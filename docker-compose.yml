@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   tap:
-    image: ghcr.io/bluesky-social/indigo/tap:latest
+    image: ghcr.io/bluesky-social/indigo/tap:0.1.8
     platform: linux/amd64
     ports:
       - "2480:2480"
@@ -10,6 +10,8 @@ services:
       - TAP_ADMIN_PASSWORD=admin
       - TAP_PORT=2480
       - TAP_DB_PATH=/data/tap.db
+      - TAP_RESYNC_PARALLELISM=32
+      - TAP_REPO_FETCH_TIMEOUT=200s
     volumes:
       - ./tap_data:/data
     restart: unless-stopped
